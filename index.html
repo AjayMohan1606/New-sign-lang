@@ -1,0 +1,1160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SignBridge — Real ASL Video Call</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600&family=Playfair+Display:ital,wght@0,600;1,400&display=swap" rel="stylesheet">
+
+<script src="https://unpkg.com/@tensorflow/tfjs-core@3.7.0/dist/tf-core.js"></script>
+<script src="https://unpkg.com/@tensorflow/tfjs-converter@3.7.0/dist/tf-converter.js"></script>
+<script src="https://unpkg.com/@tensorflow/tfjs-backend-webgl@3.7.0/dist/tf-backend-webgl.js"></script>
+<script src="https://unpkg.com/@tensorflow-models/handpose@0.0.7/dist/handpose.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/fingerpose@0.1.0/dist/fingerpose.min.js"></script>
+<!-- Socket.IO for signaling -->
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#09090b;--surface:#111114;--panel:#15151a;--border:rgba(255,255,255,0.07);
+  --white:#f0ede8;--muted:rgba(240,237,232,0.42);
+  --green:#4fffb0;--blue:#4fc3ff;--red:#ff5f7e;--amber:#ffb340;
+  --r:18px;
+}
+body{font-family:'Sora',sans-serif;background:var(--bg);color:var(--white);min-height:100vh;display:flex;flex-direction:column;overflow-x:hidden}
+
+/* ── Loading ── */
+#loadOverlay{position:fixed;inset:0;background:rgba(9,9,11,0.97);backdrop-filter:blur(12px);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;z-index:300;transition:opacity .5s}
+#loadOverlay.out{opacity:0;pointer-events:none}
+.spinner{width:48px;height:48px;border:3px solid rgba(79,255,176,.12);border-top-color:var(--green);border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.load-title{font-family:'Playfair Display',serif;font-size:1.5rem;color:var(--white)}
+.load-t{color:var(--muted);font-size:.85rem;font-weight:300}
+.load-steps{display:flex;flex-direction:column;gap:6px;margin-top:4px}
+.load-step{font-size:.74rem;color:rgba(240,237,232,.3);display:flex;align-items:center;gap:8px;transition:color .3s}
+.load-step.done{color:var(--green)}
+.load-step.active{color:var(--white)}
+.step-dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex-shrink:0}
+
+/* ── Header ── */
+header{display:flex;align-items:center;justify-content:space-between;padding:16px 30px;border-bottom:1px solid var(--border);z-index:10;position:relative}
+.logo{display:flex;align-items:center;gap:11px}
+.logo-mark{width:36px;height:36px;background:var(--green);border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:1.1rem}
+.logo-name{font-family:'Playfair Display',serif;font-size:1.2rem}
+.logo-name em{color:var(--green);font-style:normal}
+.hdr-mid{display:flex;align-items:center;gap:10px}
+.timer{font-size:.82rem;color:var(--muted);font-weight:300;letter-spacing:.05em;display:none}
+.timer.on{display:block}
+.live-pill{display:flex;align-items:center;gap:6px;padding:5px 13px;border-radius:100px;background:rgba(79,255,176,.08);border:1px solid rgba(79,255,176,.2);font-size:.72rem;font-weight:500;color:var(--green);opacity:0;transition:opacity .4s}
+.live-pill.on{opacity:1}
+.ldot{width:6px;height:6px;border-radius:50%;background:var(--green);animation:lp 1.2s infinite}
+@keyframes lp{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(1.5)}}
+.back-btn{padding:7px 16px;border-radius:100px;border:1px solid var(--border);background:transparent;color:var(--muted);font-family:'Sora',sans-serif;font-size:.8rem;cursor:pointer;transition:all .2s;display:none}
+.back-btn:hover{background:var(--panel);color:var(--white)}
+
+/* ── Connection status pill ── */
+.conn-status{display:flex;align-items:center;gap:6px;padding:5px 13px;border-radius:100px;font-size:.72rem;font-weight:500;border:1px solid var(--border);color:var(--muted);transition:all .3s;display:none}
+.conn-status.on{display:flex}
+.conn-status.connected{border-color:rgba(79,255,176,.3);color:var(--green);background:rgba(79,255,176,.06)}
+.conn-status.waiting{border-color:rgba(255,179,64,.3);color:var(--amber);background:rgba(255,179,64,.06)}
+.conn-dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+
+/* ── Landing ── */
+#landing{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:60px 24px;gap:36px;text-align:center;animation:fadeUp .6s ease}
+@keyframes fadeUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+.eyebrow{font-size:.72rem;font-weight:500;letter-spacing:.18em;text-transform:uppercase;color:var(--green);margin-bottom:10px}
+.hero{font-family:'Playfair Display',serif;font-size:clamp(2.2rem,5vw,3.6rem);line-height:1.13;letter-spacing:-.02em;max-width:680px}
+.hero em{font-style:italic;color:var(--green)}
+.sub{font-size:.96rem;color:var(--muted);max-width:460px;line-height:1.72;font-weight:300}
+.tech-badges{display:flex;gap:8px;justify-content:center;flex-wrap:wrap}
+.badge{padding:4px 12px;border-radius:100px;font-size:.7rem;font-weight:500;border:1px solid var(--border);color:var(--muted)}
+
+/* ── Room cards ── */
+.cards{display:flex;gap:18px;margin-top:8px;flex-wrap:wrap;justify-content:center}
+.card{flex:1;max-width:270px;min-width:220px;background:var(--panel);border:1px solid var(--border);border-radius:var(--r);padding:26px 22px;cursor:pointer;transition:all .25s;text-align:left;position:relative;overflow:hidden}
+.card::after{content:'';position:absolute;inset:0;opacity:0;transition:opacity .3s;pointer-events:none}
+.card.s::after{background:radial-gradient(circle at 50% 0%,rgba(79,255,176,.07),transparent 68%)}
+.card.l::after{background:radial-gradient(circle at 50% 0%,rgba(79,195,255,.07),transparent 68%)}
+.card.j::after{background:radial-gradient(circle at 50% 0%,rgba(255,179,64,.07),transparent 68%)}
+.card:hover{border-color:rgba(255,255,255,.13);transform:translateY(-3px)}
+.card:hover::after{opacity:1}
+.card-icon{width:46px;height:46px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:1.4rem;margin-bottom:14px}
+.card.s .card-icon{background:rgba(79,255,176,.1)}
+.card.l .card-icon{background:rgba(79,195,255,.1)}
+.card.j .card-icon{background:rgba(255,179,64,.1)}
+.card-title{font-weight:600;font-size:.97rem;margin-bottom:5px}
+.card-desc{font-size:.8rem;color:var(--muted);line-height:1.6}
+.card-badge{display:inline-block;margin-top:13px;padding:3px 10px;border-radius:100px;font-size:.7rem;font-weight:500}
+.card.s .card-badge{background:rgba(79,255,176,.1);color:var(--green)}
+.card.l .card-badge{background:rgba(79,195,255,.1);color:var(--blue)}
+.card.j .card-badge{background:rgba(255,179,64,.1);color:var(--amber)}
+.landing-note{font-size:.74rem;color:var(--muted);opacity:.55}
+
+/* ── Join Room modal ── */
+#joinModal{position:fixed;inset:0;background:rgba(9,9,11,.85);backdrop-filter:blur(12px);z-index:200;display:flex;align-items:center;justify-content:center;display:none}
+#joinModal.on{display:flex;animation:fadeUp .25s ease}
+.modal-box{background:var(--panel);border:1px solid var(--border);border-radius:22px;padding:32px 28px;width:100%;max-width:420px;display:flex;flex-direction:column;gap:18px}
+.modal-title{font-family:'Playfair Display',serif;font-size:1.3rem}
+.modal-sub{font-size:.84rem;color:var(--muted);line-height:1.6}
+.modal-input{width:100%;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 16px;color:var(--white);font-family:'Sora',sans-serif;font-size:.92rem;outline:none;transition:border-color .2s}
+.modal-input:focus{border-color:rgba(79,255,176,.4)}
+.modal-input::placeholder{color:var(--muted)}
+.modal-row{display:flex;gap:10px}
+.mbtn{flex:1;padding:11px 18px;border-radius:100px;font-family:'Sora',sans-serif;font-size:.83rem;font-weight:500;cursor:pointer;border:none;transition:all .2s}
+.mbtn.p{background:var(--amber);color:#09090b}
+.mbtn.p:hover{filter:brightness(1.1)}
+.mbtn.g{background:var(--panel);color:var(--muted);border:1px solid var(--border)}
+.mbtn.g:hover{background:var(--surface);color:var(--white)}
+
+/* ── Invite banner ── */
+#inviteBanner{background:var(--panel);border:1px solid rgba(79,255,176,.18);border-radius:14px;padding:12px 16px;display:flex;align-items:center;gap:12px;margin:0 22px;display:none;animation:fadeUp .3s ease}
+#inviteBanner.on{display:flex}
+.inv-label{font-size:.72rem;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--green);white-space:nowrap}
+.inv-link{flex:1;font-size:.78rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:monospace;background:var(--surface);padding:5px 10px;border-radius:8px;border:1px solid var(--border)}
+.inv-btn{padding:6px 14px;border-radius:100px;font-family:'Sora',sans-serif;font-size:.74rem;font-weight:500;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--green);transition:all .2s;white-space:nowrap}
+.inv-btn:hover{background:rgba(79,255,176,.08)}
+.inv-close{background:none;border:none;color:var(--muted);cursor:pointer;font-size:.9rem;padding:0 4px}
+
+/* ── Call View ── */
+#callView{display:none;flex:1;flex-direction:column;padding:16px 22px 20px;gap:14px}
+#callView.on{display:flex;animation:fadeUp .4s ease}
+.vgrid{display:grid;grid-template-columns:1fr 1fr;gap:14px;flex:1}
+
+/* ── Video Panel ── */
+.vpanel{position:relative;border-radius:var(--r);overflow:hidden;background:#060609;border:1px solid var(--border);min-height:300px}
+.vpanel video,.vpanel canvas.vc{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.vpanel video{transform:scaleX(-1);z-index:1}
+.vpanel canvas.vc{z-index:2;pointer-events:none;transform:scaleX(-1)}
+.vlabel{position:absolute;top:12px;left:12px;z-index:8;display:flex;align-items:center;gap:7px;background:rgba(0,0,0,.6);backdrop-filter:blur(8px);padding:5px 12px;border-radius:100px;font-size:.74rem;font-weight:500;border:1px solid rgba(255,255,255,.07)}
+.vdot{width:6px;height:6px;border-radius:50%}
+.fps-badge{position:absolute;top:12px;right:12px;z-index:8;background:rgba(0,0,0,.5);backdrop-filter:blur(6px);padding:4px 10px;border-radius:100px;font-size:.66rem;color:var(--muted);border:1px solid var(--border)}
+
+/* remote video - NOT mirrored */
+#remoteVid{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:1;transform:none !important}
+
+/* ── Detection badge ── */
+.det-badge{position:absolute;top:50px;right:12px;z-index:8;display:flex;align-items:center;gap:10px;background:rgba(9,9,11,.82);backdrop-filter:blur(14px);border:1px solid rgba(79,255,176,.25);border-radius:14px;padding:10px 14px;opacity:0;transition:opacity .25s}
+.det-badge.on{opacity:1}
+.det-char{font-family:'Playfair Display',serif;font-size:2rem;color:var(--green);line-height:1;min-width:30px;text-align:center;transition:transform .15s}
+.det-char.pop{transform:scale(1.4);color:#fff}
+.det-meta{display:flex;flex-direction:column;gap:3px}
+.det-cl{font-size:.64rem;color:var(--muted)}
+.det-bar{width:60px;height:3px;background:rgba(255,255,255,.08);border-radius:4px;overflow:hidden}
+.det-fill{height:100%;background:var(--green);border-radius:4px;transition:width .25s}
+.det-score{font-size:.62rem;color:var(--green)}
+
+/* ── Translation overlay ── */
+.t-overlay{position:absolute;bottom:0;left:0;right:0;z-index:9;padding:0 14px 14px;pointer-events:none}
+.t-bubble{background:rgba(9,9,11,.86);backdrop-filter:blur(16px);border:1px solid rgba(255,255,255,.09);border-radius:13px;padding:11px 14px}
+.t-label{font-size:.62rem;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--green);margin-bottom:5px}
+.t-text{font-size:1rem;color:var(--white);line-height:1.45;word-break:break-word;min-height:1.45em}
+.cursor{display:inline-block;width:2px;height:.9em;background:var(--green);vertical-align:text-bottom;margin-left:1px;animation:blink 1s infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+
+/* ── Placeholder ── */
+.vph{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:var(--muted);z-index:5;background:var(--surface);transition:opacity .4s}
+.vph.gone{opacity:0;pointer-events:none}
+.vph-icon{font-size:2.2rem;opacity:.3}
+.vph p{font-size:.82rem}
+
+/* ── Hold progress ring ── */
+.hold-ring{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:80px;height:80px;z-index:15;opacity:0;transition:opacity .2s;pointer-events:none}
+.hold-ring.on{opacity:1}
+.hold-ring svg{transform:rotate(-90deg)}
+.hold-circle{fill:none;stroke:var(--green);stroke-width:4;stroke-dasharray:220;stroke-dashoffset:220;transition:stroke-dashoffset .1s linear;stroke-linecap:round}
+.hold-label{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:.7rem;color:var(--green);font-weight:600}
+
+/* ── Transcript ── */
+.tbar{background:var(--panel);border:1px solid var(--border);border-radius:13px;padding:12px 16px;display:flex;align-items:flex-start;gap:13px}
+.tbar-label{font-size:.64rem;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--green);white-space:nowrap;padding-top:3px}
+.tbar-text{flex:1;font-size:.9rem;color:var(--white);line-height:1.5;word-break:break-word;min-height:1.4em}
+.tbar-actions{display:flex;gap:7px;align-items:center;flex-shrink:0}
+.ta{padding:4px 11px;border-radius:100px;font-family:'Sora',sans-serif;font-size:.72rem;font-weight:500;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--muted);transition:all .2s}
+.ta:hover{background:var(--surface);color:var(--white)}
+
+/* ── Controls ── */
+.cbar{display:flex;align-items:center;justify-content:center;gap:10px}
+.cb{display:flex;align-items:center;justify-content:center;gap:7px;padding:10px 20px;border-radius:100px;font-family:'Sora',sans-serif;font-size:.83rem;font-weight:500;cursor:pointer;border:none;transition:all .2s;white-space:nowrap}
+.cb.p{background:var(--green);color:#09090b}
+.cb.p:hover{filter:brightness(1.1);transform:translateY(-1px)}
+.cb.d{background:rgba(255,95,126,.1);color:var(--red);border:1px solid rgba(255,95,126,.22)}
+.cb.d:hover{background:rgba(255,95,126,.2)}
+.cb.g{background:var(--panel);color:var(--white);border:1px solid var(--border)}
+.cb.g:hover{background:#1c1c22}
+.cb.ico{padding:10px;width:42px;height:42px}
+.cb.inv{background:rgba(79,255,176,.08);color:var(--green);border:1px solid rgba(79,255,176,.2)}
+.cb.inv:hover{background:rgba(79,255,176,.14)}
+
+/* ── Toast ── */
+.toast{position:fixed;bottom:28px;left:50%;transform:translateX(-50%) translateY(14px);background:var(--white);color:#09090b;padding:9px 20px;border-radius:100px;font-size:.8rem;font-weight:500;opacity:0;transition:all .3s;pointer-events:none;z-index:999;white-space:nowrap;box-shadow:0 8px 28px rgba(0,0,0,.5)}
+.toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
+
+/* ── ASL reference panel ── */
+.ref-toggle{position:fixed;bottom:28px;right:28px;width:44px;height:44px;border-radius:50%;background:var(--panel);border:1px solid var(--border);display:none;align-items:center;justify-content:center;cursor:pointer;z-index:50;font-size:1.1rem;transition:all .2s}
+.ref-toggle.show{display:flex}
+.ref-toggle:hover{background:var(--surface);border-color:rgba(255,255,255,.15)}
+.ref-panel{position:fixed;bottom:82px;right:28px;width:320px;background:var(--panel);border:1px solid var(--border);border-radius:var(--r);padding:16px;z-index:50;display:none;max-height:60vh;overflow-y:auto}
+.ref-panel.show{display:block;animation:fadeUp .2s ease}
+.ref-title{font-size:.72rem;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--green);margin-bottom:12px}
+.ref-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:6px}
+.ref-item{background:var(--surface);border-radius:8px;padding:6px 4px;text-align:center;cursor:default;border:1px solid var(--border)}
+.ref-item .rl{font-family:'Playfair Display',serif;font-size:1.1rem;color:var(--green)}
+.ref-item .rs{font-size:.55rem;color:var(--muted);margin-top:2px}
+
+@media(max-width:700px){
+  .vgrid{grid-template-columns:1fr}
+  .cards{flex-direction:column;align-items:center}
+  header{padding:12px 16px}
+  #callView{padding:10px 10px 14px}
+  .ref-panel{width:calc(100vw - 40px);right:20px}
+  #inviteBanner{margin:0 10px;flex-wrap:wrap}
+}
+</style>
+</head>
+<body>
+
+<!-- Loading overlay -->
+<div id="loadOverlay">
+  <div class="spinner"></div>
+  <div class="load-title">Sign<em style="color:var(--green);font-style:normal">Bridge</em></div>
+  <div class="load-steps">
+    <div class="load-step active" id="step1"><div class="step-dot"></div>Loading TensorFlow.js</div>
+    <div class="load-step" id="step2"><div class="step-dot"></div>Loading Handpose neural network</div>
+    <div class="load-step" id="step3"><div class="step-dot"></div>Defining ASL gesture library</div>
+    <div class="load-step" id="step4"><div class="step-dot"></div>Warming up WebGL backend</div>
+  </div>
+  <div class="load-t" id="loadMsg">Initialising…</div>
+</div>
+
+<!-- Join Room Modal -->
+<div id="joinModal">
+  <div class="modal-box">
+    <div class="modal-title">🤟 Join a Call</div>
+    <div class="modal-sub">Enter the room code or paste the full invite link you received.</div>
+    <input class="modal-input" id="joinInput" placeholder="Room code or invite link…" autocomplete="off"/>
+    <div class="modal-row">
+      <button class="mbtn g" onclick="closeJoinModal()">Cancel</button>
+      <button class="mbtn p" onclick="joinFromModal()">Join Call →</button>
+    </div>
+  </div>
+</div>
+
+<!-- Header -->
+<header>
+  <div class="logo">
+    <div class="logo-mark">🤟</div>
+    <div class="logo-name">Sign<em>Bridge</em></div>
+  </div>
+  <div class="hdr-mid">
+    <span class="timer" id="timer">00:00</span>
+    <div class="live-pill" id="livePill"><div class="ldot"></div>LIVE</div>
+    <div class="conn-status" id="connStatus"><div class="conn-dot"></div><span id="connLabel">Connecting…</span></div>
+  </div>
+  <button class="back-btn" id="backBtn" onclick="endCall()">← End Call</button>
+</header>
+
+<!-- Invite Banner (shown during call) -->
+<div id="inviteBanner">
+  <div class="inv-label">Invite</div>
+  <div class="inv-link" id="invLinkDisplay"></div>
+  <button class="inv-btn" onclick="copyInviteLink()">⎘ Copy Link</button>
+  <button class="inv-close" onclick="document.getElementById('inviteBanner').classList.remove('on')" title="Dismiss">✕</button>
+</div>
+
+<!-- Landing -->
+<div id="landing">
+  <div>
+    <p class="eyebrow">Real ML · MediaPipe · TensorFlow.js · WebRTC · Socket.IO</p>
+    <h1 class="hero">Video calls that<br><em>speak every language</em></h1>
+  </div>
+  <p class="sub">SignBridge detects ASL letter gestures in real time and streams them as text to anyone you invite — across devices, over the internet.</p>
+  <div class="tech-badges">
+    <span class="badge">TF.js Handpose NN</span>
+    <span class="badge">Fingerpose Classifier</span>
+    <span class="badge">WebRTC P2P Video</span>
+    <span class="badge">Socket.IO Signaling</span>
+    <span class="badge">Live Invite Link</span>
+  </div>
+  <div class="cards">
+    <div class="card s" onclick="startNewCall()">
+      <div class="card-icon">🤟</div>
+      <div class="card-title">Start a New Call</div>
+      <div class="card-desc">Create a room and get an invite link to send to the other person. You'll be the ASL signer.</div>
+      <span class="card-badge">Host · ASL Signer</span>
+    </div>
+    <div class="card j" onclick="openJoinModal()">
+      <div class="card-icon">🔗</div>
+      <div class="card-title">Join a Call</div>
+      <div class="card-desc">Enter a room code or paste the invite link you received from the signer.</div>
+      <span class="card-badge">Guest · Listener</span>
+    </div>
+    <div class="card l" onclick="startLocalDemo()">
+      <div class="card-icon">💬</div>
+      <div class="card-title">Local Demo</div>
+      <div class="card-desc">Test the ASL recognition in this tab — no other person needed. Both panels use your camera.</div>
+      <span class="card-badge">Demo Mode</span>
+    </div>
+  </div>
+  <p class="landing-note">⚡ "Start a New Call" creates a shareable link · Share it with anyone to connect live</p>
+</div>
+
+<!-- Call View -->
+<div id="callView">
+  <div class="vgrid">
+
+    <!-- Signer panel (local) -->
+    <div class="vpanel" id="sigPanel">
+      <video id="sigVid" autoplay playsinline muted></video>
+      <canvas id="sigCvs" class="vc"></canvas>
+      <div class="vlabel"><div class="vdot" style="background:var(--green)"></div><span id="sigLabel">ASL Signer (You)</span></div>
+      <div class="fps-badge" id="fpsBadge">— fps</div>
+
+      <div class="det-badge" id="detBadge">
+        <div class="det-char" id="detChar">—</div>
+        <div class="det-meta">
+          <div class="det-cl">Fingerpose score</div>
+          <div class="det-bar"><div class="det-fill" id="detFill" style="width:0%"></div></div>
+          <div class="det-score" id="detScore">—/10</div>
+        </div>
+      </div>
+
+      <div class="hold-ring" id="holdRing">
+        <svg width="80" height="80" viewBox="0 0 80 80">
+          <circle cx="40" cy="40" r="35" fill="none" stroke="rgba(79,255,176,.15)" stroke-width="4"/>
+          <circle class="hold-circle" id="holdCircle" cx="40" cy="40" r="35"/>
+        </svg>
+        <div class="hold-label" id="holdLabel"></div>
+      </div>
+
+      <div class="vph" id="sigPh"><div class="vph-icon">🤟</div><p>Camera starting…</p></div>
+
+      <div class="t-overlay">
+        <div class="t-bubble">
+          <div class="t-label">🔤 ASL → Text</div>
+          <div class="t-text" id="sigBubble"><span class="cursor"></span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Remote/Listener panel -->
+    <div class="vpanel" id="lstPanel">
+      <video id="remoteVid" autoplay playsinline></video>
+      <canvas id="lstCvs" class="vc" style="display:none"></canvas>
+      <div class="vlabel"><div class="vdot" style="background:var(--blue)"></div><span id="lstLabel">Listener</span></div>
+      <div class="vph" id="lstPh">
+        <div class="vph-icon">🔗</div>
+        <p id="lstPhText">Waiting for peer…</p>
+        <p style="font-size:.7rem;color:rgba(240,237,232,.3);margin-top:4px" id="lstPhSub">Share the invite link to connect</p>
+      </div>
+      <div class="t-overlay">
+        <div class="t-bubble">
+          <div class="t-label">🔤 Signer is saying…</div>
+          <div class="t-text" id="lstBubble"><span class="cursor"></span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Transcript -->
+  <div class="tbar">
+    <div class="tbar-label">Transcript</div>
+    <div class="tbar-text" id="tbarText">Waiting for signs…</div>
+    <div class="tbar-actions">
+      <button class="ta" onclick="speakT()">🔊</button>
+      <button class="ta" onclick="copyT()">⎘ Copy</button>
+      <button class="ta" onclick="delLast()">⌫</button>
+      <button class="ta" onclick="clearT()">Clear</button>
+    </div>
+  </div>
+
+  <!-- Controls -->
+  <div class="cbar">
+    <button class="cb g ico" id="micBtn" onclick="toggleMic()" title="Toggle mic">🎤</button>
+    <button class="cb inv" onclick="copyInviteLink()">🔗 &nbsp;Share Invite</button>
+    <button class="cb d" onclick="endCall()">✕ &nbsp;End Call</button>
+    <button class="cb g" onclick="speakT()">🔊 &nbsp;Speak</button>
+  </div>
+</div>
+
+<!-- ASL Reference toggle -->
+<button class="ref-toggle" id="refToggle" onclick="toggleRef()">🔤</button>
+<div class="ref-panel" id="refPanel">
+  <div class="ref-title">ASL Alphabet Reference</div>
+  <div class="ref-grid" id="refGrid"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ═══════════════════════════════════════════════════════════
+// CONFIG
+// ═══════════════════════════════════════════════════════════
+const SIGNALING_SERVER = 'https://webrtc-server-rhu8.onrender.com';
+
+const ICE_CONFIG = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun.relay.metered.ca:80' },
+    {
+      urls: 'turn:turn.relay.metered.ca:80',
+      username: 'openrelayproject',
+      credential: 'openrelayproject'
+    }
+  ]
+};
+
+// ═══════════════════════════════════════════════════════════
+// GLOBALS
+// ═══════════════════════════════════════════════════════════
+let handposeModel = null;
+let gestureEstimator = null;
+let sigStream = null, lstStream = null;
+let transcript = '';
+let lastLetter = null, holdCount = 0;
+const HOLD_FRAMES = 12;
+let detecting = false;
+let animFrame = null;
+let callInterval = null;
+let micMuted = false;
+let lastFpsTime = 0, frameCounter = 0;
+let refVisible = false;
+
+// WebRTC
+let socket = null;
+let peerConnection = null;
+let roomId = null;
+let isHost = false;
+let isLocalDemo = false;
+let peerConnected = false;
+
+// ═══════════════════════════════════════════════════════════
+// ROOM UTILITIES
+// ═══════════════════════════════════════════════════════════
+function generateRoomId() {
+  return Math.random().toString(36).substr(2, 8).toUpperCase();
+}
+
+function getInviteLink(rid) {
+  return window.location.origin + window.location.pathname + '?room=' + rid;
+}
+
+function getRoomFromURL() {
+  const params = new URLSearchParams(window.location.search);
+  return params.get('room');
+}
+
+// ═══════════════════════════════════════════════════════════
+// SOCKET.IO SIGNALING
+// ═══════════════════════════════════════════════════════════
+function connectSignaling() {
+  if (socket) return;
+  socket = io(SIGNALING_SERVER, { transports: ['websocket', 'polling'] });
+
+  socket.on('connect', () => {
+    console.log('✅ Signaling connected:', socket.id);
+    if (roomId) socket.emit('join-room', { roomId, isHost });
+  });
+
+  socket.on('connect_error', (e) => {
+    console.warn('Signaling error:', e.message);
+    toast('⚠️ Signaling server unreachable — local demo only', 3500);
+  });
+
+  socket.on('peer-joined', async () => {
+    toast('🎉 Peer joined! Connecting video…', 2500);
+    setConnStatus('waiting', 'Connecting video…');
+    if (isHost) await createOffer();
+  });
+
+  socket.on('offer', async ({ sdp }) => {
+    await handleOffer(sdp);
+  });
+
+  socket.on('answer', async ({ sdp }) => {
+    if (!peerConnection) return;
+    await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
+  });
+
+  socket.on('ice-candidate', async ({ candidate }) => {
+    if (!peerConnection || !candidate) return;
+    try { await peerConnection.addIceCandidate(new RTCIceCandidate(candidate)); } catch(e){}
+  });
+
+  socket.on('peer-left', () => {
+    toast('📴 Peer disconnected', 2000);
+    setConnStatus('waiting', 'Peer left');
+    peerConnected = false;
+    document.getElementById('remoteVid').srcObject = null;
+    const ph = document.getElementById('lstPh');
+    ph.classList.remove('gone');
+    document.getElementById('lstPhText').textContent = 'Peer disconnected';
+    document.getElementById('lstPhSub').textContent = 'Share the link again to reconnect';
+  });
+
+  // Transcript sync from remote signer
+  socket.on('transcript-update', ({ text }) => {
+    // Only the listener receives this; update their view
+    if (!isHost) {
+      transcript = text;
+      syncUI();
+    }
+  });
+}
+
+// ═══════════════════════════════════════════════════════════
+// WEBRTC PEER CONNECTION
+// ═══════════════════════════════════════════════════════════
+function createPeer() {
+  if (peerConnection) { peerConnection.close(); }
+  peerConnection = new RTCPeerConnection(ICE_CONFIG);
+
+  // Add local stream tracks
+  if (sigStream) {
+    sigStream.getTracks().forEach(track => peerConnection.addTrack(track, sigStream));
+  }
+
+  // Receive remote stream
+  peerConnection.ontrack = (e) => {
+    const remoteVid = document.getElementById('remoteVid');
+    if (e.streams && e.streams[0]) {
+      remoteVid.srcObject = e.streams[0];
+      document.getElementById('lstPh').classList.add('gone');
+      peerConnected = true;
+      setConnStatus('connected', 'Connected');
+      toast('✅ Video connected!', 2000);
+    }
+  };
+
+  // ICE candidate
+  peerConnection.onicecandidate = ({ candidate }) => {
+    if (candidate && socket) {
+      socket.emit('ice-candidate', { roomId, candidate });
+    }
+  };
+
+  peerConnection.onconnectionstatechange = () => {
+    console.log('PC state:', peerConnection.connectionState);
+    if (peerConnection.connectionState === 'failed') {
+      toast('⚠️ Connection failed — try refreshing', 3000);
+      setConnStatus('waiting', 'Failed');
+    }
+  };
+
+  // Data channel for transcript
+  if (isHost) {
+    const dc = peerConnection.createDataChannel('transcript');
+    dc.onopen = () => console.log('DataChannel open');
+    window._dc = dc;
+  } else {
+    peerConnection.ondatachannel = (e) => {
+      window._dc = e.channel;
+      e.channel.onmessage = (msg) => {
+        try {
+          const data = JSON.parse(msg.data);
+          if (data.type === 'transcript') {
+            transcript = data.text;
+            syncUI();
+          }
+        } catch(err) {}
+      };
+    };
+  }
+
+  return peerConnection;
+}
+
+async function createOffer() {
+  createPeer();
+  const offer = await peerConnection.createOffer();
+  await peerConnection.setLocalDescription(offer);
+  socket.emit('offer', { roomId, sdp: peerConnection.localDescription });
+}
+
+async function handleOffer(sdp) {
+  createPeer();
+  await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
+  const answer = await peerConnection.createAnswer();
+  await peerConnection.setLocalDescription(answer);
+  socket.emit('answer', { roomId, sdp: peerConnection.localDescription });
+}
+
+// ═══════════════════════════════════════════════════════════
+// CONN STATUS UI
+// ═══════════════════════════════════════════════════════════
+function setConnStatus(state, label) {
+  const el = document.getElementById('connStatus');
+  el.className = 'conn-status on ' + state;
+  document.getElementById('connLabel').textContent = label;
+}
+
+// ═══════════════════════════════════════════════════════════
+// INVITE LINK
+// ═══════════════════════════════════════════════════════════
+function showInviteBanner(link) {
+  const banner = document.getElementById('inviteBanner');
+  document.getElementById('invLinkDisplay').textContent = link;
+  banner.classList.add('on');
+}
+
+function copyInviteLink() {
+  if (!roomId) return toast('No active room');
+  const link = getInviteLink(roomId);
+  navigator.clipboard.writeText(link).then(() => toast('📋 Invite link copied!')).catch(() => {
+    prompt('Copy this invite link:', link);
+  });
+}
+
+// ═══════════════════════════════════════════════════════════
+// NAVIGATION
+// ═══════════════════════════════════════════════════════════
+async function startNewCall() {
+  roomId = generateRoomId();
+  isHost = true;
+  isLocalDemo = false;
+  const link = getInviteLink(roomId);
+
+  // Update URL without reload
+  window.history.pushState({}, '', '?room=' + roomId);
+
+  await enterCallView();
+
+  setConnStatus('waiting', 'Waiting for peer…');
+  connectSignaling();
+
+  // Show invite banner
+  showInviteBanner(link);
+  toast('📋 Room created! Share the invite link.', 4000);
+  document.getElementById('lstPhText').textContent = 'Waiting for guest…';
+  document.getElementById('lstPhSub').textContent = 'Share the invite link above';
+  document.getElementById('sigLabel').textContent = 'You (ASL Signer)';
+  document.getElementById('lstLabel').textContent = 'Guest (Listener)';
+}
+
+function openJoinModal() {
+  const fromURL = getRoomFromURL();
+  if (fromURL) {
+    document.getElementById('joinInput').value = fromURL;
+  }
+  document.getElementById('joinModal').classList.add('on');
+  setTimeout(() => document.getElementById('joinInput').focus(), 100);
+}
+
+function closeJoinModal() {
+  document.getElementById('joinModal').classList.remove('on');
+}
+
+function joinFromModal() {
+  let val = document.getElementById('joinInput').value.trim();
+  if (!val) return toast('Please enter a room code or link');
+  // Extract room code from link if full URL pasted
+  const match = val.match(/[?&]room=([A-Z0-9]+)/i);
+  if (match) val = match[1];
+  val = val.toUpperCase();
+  closeJoinModal();
+  joinRoom(val);
+}
+
+async function joinRoom(rid) {
+  roomId = rid;
+  isHost = false;
+  isLocalDemo = false;
+  window.history.pushState({}, '', '?room=' + roomId);
+
+  await enterCallView();
+
+  setConnStatus('waiting', 'Joining room…');
+  connectSignaling();
+
+  document.getElementById('sigLabel').textContent = 'Host (ASL Signer)';
+  document.getElementById('lstLabel').textContent = 'You (Listener)';
+  // In join mode, ASL detection panel shows host's camera via WebRTC
+  // Swap panels visually: listener sees remote in left panel
+  toast('🔗 Joining room ' + roomId + '…', 2500);
+}
+
+async function startLocalDemo() {
+  isLocalDemo = true;
+  isHost = false;
+  roomId = null;
+  await enterCallView();
+  // Start second camera for listener panel
+  await startLstCam();
+  document.getElementById('sigLabel').textContent = 'ASL Signer';
+  document.getElementById('lstLabel').textContent = 'Listener';
+  toast('🤟 Local demo — hold a sign steady!', 4000);
+}
+
+async function enterCallView() {
+  document.getElementById('landing').style.display = 'none';
+  document.getElementById('callView').classList.add('on');
+  document.getElementById('backBtn').style.display = '';
+  document.getElementById('livePill').classList.add('on');
+  document.getElementById('refToggle').classList.add('show');
+  startTimer();
+
+  toast('Cameras starting…', 1500);
+  await startSigCam();
+
+  detecting = true;
+  detectionLoop();
+}
+
+function endCall() {
+  detecting = false;
+  if (animFrame) cancelAnimationFrame(animFrame);
+  sigStream?.getTracks().forEach(t => t.stop());
+  lstStream?.getTracks().forEach(t => t.stop());
+  sigStream = null; lstStream = null;
+
+  if (peerConnection) { peerConnection.close(); peerConnection = null; }
+  if (socket) { socket.disconnect(); socket = null; }
+
+  ['sigVid', 'remoteVid'].forEach(id => { const v = document.getElementById(id); if(v) v.srcObject = null; });
+  document.getElementById('sigCvs').getContext('2d').clearRect(0, 0, 9999, 9999);
+  document.getElementById('sigPh').className = 'vph';
+  document.getElementById('sigPh').innerHTML = '<div class="vph-icon">🤟</div><p>Camera starting…</p>';
+  document.getElementById('lstPh').className = 'vph';
+  document.getElementById('lstPh').innerHTML = '<div class="vph-icon">🔗</div><p id="lstPhText">Waiting for peer…</p><p style="font-size:.7rem;color:rgba(240,237,232,.3);margin-top:4px" id="lstPhSub">Share the invite link to connect</p>';
+
+  document.getElementById('inviteBanner').classList.remove('on');
+  document.getElementById('connStatus').className = 'conn-status';
+
+  clearDetUI();
+  stopTimer();
+  document.getElementById('livePill').classList.remove('on');
+  document.getElementById('callView').classList.remove('on');
+  document.getElementById('landing').style.display = '';
+  document.getElementById('backBtn').style.display = 'none';
+  document.getElementById('refToggle').classList.remove('show');
+  if (refVisible) toggleRef();
+  clearT();
+
+  // Clean URL
+  window.history.pushState({}, '', window.location.pathname);
+  peerConnected = false;
+  isLocalDemo = false;
+  roomId = null;
+}
+
+function toggleMic() {
+  micMuted = !micMuted;
+  sigStream?.getAudioTracks().forEach(t => t.enabled = !micMuted);
+  document.getElementById('micBtn').textContent = micMuted ? '🔇' : '🎤';
+  toast(micMuted ? 'Mic muted' : 'Mic on');
+}
+
+// ═══════════════════════════════════════════════════════════
+// ASL GESTURE DEFINITIONS
+// ═══════════════════════════════════════════════════════════
+function buildGestures() {
+  const { GestureDescription, Finger, FingerCurl, FingerDirection } = fp;
+  const NoCurl   = FingerCurl.NoCurl;
+  const HalfCurl = FingerCurl.HalfCurl;
+  const FullCurl = FingerCurl.FullCurl;
+  const VUp      = FingerDirection.VerticalUp;
+  const VDown    = FingerDirection.VerticalDown;
+  const HLeft    = FingerDirection.HorizontalLeft;
+  const HRight   = FingerDirection.HorizontalRight;
+  const DUL      = FingerDirection.DiagonalUpLeft;
+  const DUR      = FingerDirection.DiagonalUpRight;
+  const DDL      = FingerDirection.DiagonalDownLeft;
+  const DDR      = FingerDirection.DiagonalDownRight;
+  const T = Finger.Thumb, I = Finger.Index, M = Finger.Middle, R = Finger.Ring, P = Finger.Pinky;
+
+  const g = {};
+
+  g.A = new GestureDescription('A');
+  g.A.addCurl(T, NoCurl, 1.0); g.A.addCurl(T, HalfCurl, 0.9);
+  for(const f of [I,M,R,P]){ g.A.addCurl(f, FullCurl, 1.0); g.A.addCurl(f, HalfCurl, 0.8); }
+
+  g.B = new GestureDescription('B');
+  g.B.addCurl(T, FullCurl, 1.0); g.B.addCurl(T, HalfCurl, 0.8);
+  for(const f of [I,M,R,P]){ g.B.addCurl(f, NoCurl, 1.0); g.B.addDirection(f, VUp, 1.0); g.B.addDirection(f, DUR, 0.8); }
+
+  g.C = new GestureDescription('C');
+  for(const f of [T,I,M,R,P]){ g.C.addCurl(f, HalfCurl, 1.0); g.C.addCurl(f, NoCurl, 0.7); }
+
+  g.D = new GestureDescription('D');
+  g.D.addCurl(I, NoCurl, 1.0); g.D.addDirection(I, VUp, 1.0);
+  g.D.addCurl(T, HalfCurl, 1.0);
+  for(const f of [M,R,P]){ g.D.addCurl(f, FullCurl, 1.0); g.D.addCurl(f, HalfCurl, 0.8); }
+
+  g.E = new GestureDescription('E');
+  for(const f of [T,I,M,R,P]){ g.E.addCurl(f, FullCurl, 1.0); g.E.addCurl(f, HalfCurl, 0.8); }
+
+  g.F = new GestureDescription('F');
+  g.F.addCurl(T, HalfCurl, 1.0);
+  g.F.addCurl(I, HalfCurl, 1.0); g.F.addCurl(I, FullCurl, 0.8);
+  for(const f of [M,R,P]){ g.F.addCurl(f, NoCurl, 1.0); g.F.addDirection(f, VUp, 1.0); }
+
+  g.G = new GestureDescription('G');
+  g.G.addCurl(I, NoCurl, 1.0); g.G.addDirection(I, HLeft, 1.0); g.G.addDirection(I, HRight, 0.9);
+  g.G.addCurl(T, NoCurl, 1.0); g.G.addDirection(T, HLeft, 1.0); g.G.addDirection(T, HRight, 0.9);
+  for(const f of [M,R,P]){ g.G.addCurl(f, FullCurl, 1.0); }
+
+  g.H = new GestureDescription('H');
+  for(const f of [I,M]){ g.H.addCurl(f, NoCurl, 1.0); g.H.addDirection(f, HLeft, 1.0); g.H.addDirection(f, HRight, 0.9); }
+  g.H.addCurl(T, FullCurl, 1.0); g.H.addCurl(T, HalfCurl, 0.8);
+  for(const f of [R,P]){ g.H.addCurl(f, FullCurl, 1.0); }
+
+  g.I = new GestureDescription('I');
+  g.I.addCurl(P, NoCurl, 1.0); g.I.addDirection(P, VUp, 1.0); g.I.addDirection(P, DUR, 0.8);
+  for(const f of [T,I,M,R]){ g.I.addCurl(f, FullCurl, 1.0); g.I.addCurl(f, HalfCurl, 0.8); }
+
+  g.K = new GestureDescription('K');
+  g.K.addCurl(I, NoCurl, 1.0); g.K.addDirection(I, VUp, 1.0); g.K.addDirection(I, DUR, 0.9);
+  g.K.addCurl(M, NoCurl, 1.0); g.K.addDirection(M, DUR, 1.0); g.K.addDirection(M, VUp, 0.8);
+  g.K.addCurl(T, NoCurl, 1.0);
+  for(const f of [R,P]){ g.K.addCurl(f, FullCurl, 1.0); }
+
+  g.L = new GestureDescription('L');
+  g.L.addCurl(I, NoCurl, 1.0); g.L.addDirection(I, VUp, 1.0);
+  g.L.addCurl(T, NoCurl, 1.0); g.L.addDirection(T, HLeft, 1.0); g.L.addDirection(T, HRight, 0.9);
+  for(const f of [M,R,P]){ g.L.addCurl(f, FullCurl, 1.0); }
+
+  g.M = new GestureDescription('M');
+  g.M.addCurl(T, HalfCurl, 1.0); g.M.addCurl(T, FullCurl, 0.8);
+  for(const f of [I,M,R]){ g.M.addCurl(f, HalfCurl, 1.0); g.M.addCurl(f, FullCurl, 0.8); g.M.addCurl(f, NoCurl, 0.5); }
+  g.M.addCurl(P, FullCurl, 1.0);
+
+  g.N = new GestureDescription('N');
+  g.N.addCurl(T, HalfCurl, 1.0); g.N.addCurl(T, FullCurl, 0.8);
+  for(const f of [I,M]){ g.N.addCurl(f, HalfCurl, 1.0); g.N.addCurl(f, FullCurl, 0.8); }
+  for(const f of [R,P]){ g.N.addCurl(f, FullCurl, 1.0); }
+
+  g.O = new GestureDescription('O');
+  for(const f of [T,I,M,R,P]){ g.O.addCurl(f, HalfCurl, 1.0); g.O.addDirection(f, DDL, 0.9); g.O.addDirection(f, VDown, 0.8); }
+
+  g.P = new GestureDescription('P');
+  g.P.addCurl(I, NoCurl, 1.0); g.P.addDirection(I, VDown, 1.0); g.P.addDirection(I, DDL, 0.9);
+  g.P.addCurl(M, NoCurl, 1.0); g.P.addDirection(M, VDown, 0.9);
+  g.P.addCurl(T, NoCurl, 1.0);
+  for(const f of [R,P]){ g.P.addCurl(f, FullCurl, 1.0); }
+
+  g.Q = new GestureDescription('Q');
+  g.Q.addCurl(I, NoCurl, 1.0); g.Q.addDirection(I, VDown, 1.0); g.Q.addDirection(I, DDL, 0.9);
+  g.Q.addCurl(T, NoCurl, 1.0); g.Q.addDirection(T, VDown, 1.0);
+  for(const f of [M,R,P]){ g.Q.addCurl(f, FullCurl, 1.0); }
+
+  g.R = new GestureDescription('R');
+  g.R.addCurl(I, NoCurl, 1.0); g.R.addDirection(I, VUp, 1.0);
+  g.R.addCurl(M, NoCurl, 1.0); g.R.addDirection(M, VUp, 1.0);
+  for(const f of [T,R,P]){ g.R.addCurl(f, FullCurl, 1.0); g.R.addCurl(f, HalfCurl, 0.8); }
+
+  g.S = new GestureDescription('S');
+  for(const f of [I,M,R,P]){ g.S.addCurl(f, FullCurl, 1.0); }
+  g.S.addCurl(T, HalfCurl, 1.0); g.S.addCurl(T, NoCurl, 0.8);
+
+  g.T = new GestureDescription('T');
+  g.T.addCurl(T, NoCurl, 1.0); g.T.addCurl(T, HalfCurl, 0.9);
+  g.T.addCurl(I, FullCurl, 1.0); g.T.addCurl(I, HalfCurl, 0.9);
+  for(const f of [M,R,P]){ g.T.addCurl(f, FullCurl, 1.0); }
+
+  g.U = new GestureDescription('U');
+  g.U.addCurl(I, NoCurl, 1.0); g.U.addDirection(I, VUp, 1.0);
+  g.U.addCurl(M, NoCurl, 1.0); g.U.addDirection(M, VUp, 1.0);
+  for(const f of [T,R,P]){ g.U.addCurl(f, FullCurl, 1.0); g.U.addCurl(f, HalfCurl, 0.8); }
+
+  g.V = new GestureDescription('V');
+  g.V.addCurl(I, NoCurl, 1.0); g.V.addDirection(I, VUp, 1.0); g.V.addDirection(I, DUR, 0.9);
+  g.V.addCurl(M, NoCurl, 1.0); g.V.addDirection(M, VUp, 1.0); g.V.addDirection(M, DUL, 0.9);
+  for(const f of [T,R,P]){ g.V.addCurl(f, FullCurl, 1.0); g.V.addCurl(f, HalfCurl, 0.8); }
+
+  g.W = new GestureDescription('W');
+  for(const f of [I,M,R]){ g.W.addCurl(f, NoCurl, 1.0); g.W.addDirection(f, VUp, 1.0); g.W.addDirection(f, DUR, 0.8); }
+  g.W.addCurl(T, FullCurl, 1.0); g.W.addCurl(T, HalfCurl, 0.8);
+  g.W.addCurl(P, FullCurl, 1.0);
+
+  g.X = new GestureDescription('X');
+  g.X.addCurl(I, HalfCurl, 1.0);
+  for(const f of [T,M,R,P]){ g.X.addCurl(f, FullCurl, 1.0); g.X.addCurl(f, HalfCurl, 0.7); }
+
+  g.Y = new GestureDescription('Y');
+  g.Y.addCurl(T, NoCurl, 1.0); g.Y.addDirection(T, HLeft, 0.9); g.Y.addDirection(T, DUL, 0.8);
+  g.Y.addCurl(P, NoCurl, 1.0); g.Y.addDirection(P, VUp, 0.9); g.Y.addDirection(P, DUR, 0.8);
+  for(const f of [I,M,R]){ g.Y.addCurl(f, FullCurl, 1.0); }
+
+  g.SPACE = new GestureDescription('SPACE');
+  for(const f of [T,I,M,R,P]){ g.SPACE.addCurl(f, NoCurl, 1.0); g.SPACE.addDirection(f, VUp, 1.0); g.SPACE.addDirection(f, DUR, 0.7); g.SPACE.addDirection(f, DUL, 0.7); }
+
+  return Object.values(g);
+}
+
+// ═══════════════════════════════════════════════════════════
+// HAND DRAW
+// ═══════════════════════════════════════════════════════════
+const CONNS=[[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+
+function drawHand(ctx, pts, W, H) {
+  ctx.strokeStyle='rgba(79,255,176,.55)';
+  ctx.lineWidth=2.5;
+  for(const [a,b] of CONNS){
+    if(!pts[a]||!pts[b]) continue;
+    ctx.beginPath(); ctx.moveTo(pts[a][0],pts[a][1]); ctx.lineTo(pts[b][0],pts[b][1]); ctx.stroke();
+  }
+  for(let i=0;i<pts.length;i++){
+    if(!pts[i]) continue;
+    const tip=i%4===0;
+    ctx.beginPath(); ctx.arc(pts[i][0],pts[i][1],tip?5.5:3,0,Math.PI*2);
+    ctx.fillStyle=i===0?'rgba(255,255,255,.8)':tip?'rgba(79,255,176,1)':'rgba(79,255,176,.7)';
+    ctx.fill();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// DETECTION LOOP
+// ═══════════════════════════════════════════════════════════
+async function detectionLoop() {
+  if (!detecting) return;
+  const vid = document.getElementById('sigVid');
+  const cvs = document.getElementById('sigCvs');
+  const ctx = cvs.getContext('2d');
+
+  if (vid.readyState >= 2) {
+    cvs.width = vid.videoWidth; cvs.height = vid.videoHeight;
+    ctx.clearRect(0,0,cvs.width,cvs.height);
+    try {
+      const predictions = await handposeModel.estimateHands(vid);
+      if (predictions.length > 0) {
+        const hand = predictions[0];
+        const landmarks = hand.landmarks;
+        drawHand(ctx, landmarks, cvs.width, cvs.height);
+        const result = gestureEstimator.estimate(landmarks, 7.5);
+        if (result.gestures.length > 0) {
+          const best = result.gestures.reduce((a,b)=>a.score>b.score?a:b);
+          updateDetUI(best.name==='SPACE'?' ':best.name, best.score);
+          handleHold(best.name==='SPACE'?' ':best.name, best.score);
+        } else { clearDetUI(); }
+      } else { clearDetUI(); ctx.clearRect(0,0,cvs.width,cvs.height); }
+    } catch(e) {}
+  }
+
+  frameCounter++;
+  const now = performance.now();
+  if (now-lastFpsTime>1000){
+    document.getElementById('fpsBadge').textContent=frameCounter+' fps';
+    frameCounter=0; lastFpsTime=now;
+  }
+  animFrame = requestAnimationFrame(detectionLoop);
+}
+
+function updateDetUI(letter, score) {
+  document.getElementById('detBadge').classList.add('on');
+  document.getElementById('detChar').textContent = letter===' '?'·':letter;
+  document.getElementById('detFill').style.width=(score/10*100)+'%';
+  document.getElementById('detScore').textContent=score.toFixed(1)+'/10';
+}
+
+function clearDetUI() {
+  document.getElementById('detBadge').classList.remove('on');
+  document.getElementById('holdRing').classList.remove('on');
+  lastLetter=null; holdCount=0;
+}
+
+function handleHold(letter, score) {
+  const ring=document.getElementById('holdRing');
+  const circle=document.getElementById('holdCircle');
+  const label=document.getElementById('holdLabel');
+  if (letter===lastLetter) {
+    holdCount++;
+    const pct=Math.min(holdCount/HOLD_FRAMES,1);
+    ring.classList.add('on');
+    circle.style.strokeDashoffset=220-(220*pct);
+    label.textContent=letter===' '?'·':letter;
+    if (holdCount>=HOLD_FRAMES) {
+      commitLetter(letter);
+      holdCount=0;
+      const dc=document.getElementById('detChar');
+      dc.classList.add('pop'); setTimeout(()=>dc.classList.remove('pop'),200);
+      ring.classList.remove('on');
+      circle.style.strokeDashoffset=220;
+    }
+  } else { lastLetter=letter; holdCount=1; ring.classList.remove('on'); circle.style.strokeDashoffset=220; }
+}
+
+// ═══════════════════════════════════════════════════════════
+// TRANSCRIPT
+// ═══════════════════════════════════════════════════════════
+function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+
+function syncUI() {
+  const d=esc(transcript.slice(-70));
+  const c='<span class="cursor"></span>';
+  document.getElementById('sigBubble').innerHTML=d+c;
+  document.getElementById('lstBubble').innerHTML=d+c;
+  document.getElementById('tbarText').textContent=transcript||'Waiting for signs…';
+}
+
+function commitLetter(c) {
+  transcript += c;
+  syncUI();
+  toast(c===' '?'Space':`"${c}"`,600);
+  // Broadcast to peer via DataChannel
+  if (window._dc && window._dc.readyState==='open') {
+    window._dc.send(JSON.stringify({type:'transcript', text:transcript}));
+  }
+  // Also via socket for reliability
+  if (socket && roomId) {
+    socket.emit('transcript-update', {roomId, text: transcript});
+  }
+}
+
+function clearT(){ transcript=''; syncUI(); toast('Cleared'); broadcastTranscript(); }
+function delLast(){ if(!transcript)return; transcript=transcript.slice(0,-1); syncUI(); broadcastTranscript(); }
+function broadcastTranscript(){
+  if(window._dc&&window._dc.readyState==='open') window._dc.send(JSON.stringify({type:'transcript',text:transcript}));
+  if(socket&&roomId) socket.emit('transcript-update',{roomId,text:transcript});
+}
+function speakT(){
+  if(!transcript.trim()) return toast('Nothing to speak');
+  const u=new SpeechSynthesisUtterance(transcript);
+  u.rate=.95; speechSynthesis.cancel(); speechSynthesis.speak(u); toast('Speaking…');
+}
+function copyT(){
+  if(!transcript) return toast('Nothing to copy');
+  navigator.clipboard.writeText(transcript).then(()=>toast('Copied!'));
+}
+
+// ═══════════════════════════════════════════════════════════
+// CAMERAS
+// ═══════════════════════════════════════════════════════════
+async function startSigCam() {
+  try {
+    sigStream = await navigator.mediaDevices.getUserMedia({
+      video:{ width:640,height:480,facingMode:'user',frameRate:{ideal:20,max:30} },
+      audio:true
+    });
+    const v=document.getElementById('sigVid');
+    v.srcObject=sigStream;
+    await new Promise(r=>v.onloadedmetadata=r);
+    document.getElementById('sigPh').classList.add('gone');
+    // Add tracks to peer connection if already created
+    if (peerConnection) sigStream.getTracks().forEach(t=>peerConnection.addTrack(t,sigStream));
+    return true;
+  } catch(e) {
+    toast('Camera access denied');
+    document.getElementById('sigPh').innerHTML='<div class="vph-icon">❌</div><p>Camera denied</p>';
+    return false;
+  }
+}
+
+async function startLstCam() {
+  try {
+    lstStream=await navigator.mediaDevices.getUserMedia({video:{width:640,height:480,facingMode:'user'},audio:true});
+    const v=document.getElementById('remoteVid');
+    v.srcObject=lstStream;
+    await new Promise(r=>v.onloadedmetadata=r);
+    document.getElementById('lstPh').classList.add('gone');
+  } catch(e) {
+    const ph=document.getElementById('lstPh');
+    ph.innerHTML=`<div style="width:70px;height:70px;border-radius:50%;background:rgba(79,195,255,.1);display:flex;align-items:center;justify-content:center;font-size:1.6rem;border:2px solid rgba(79,195,255,.2)">💬</div><p style="font-size:.8rem">Listener</p><p style="font-size:.7rem;color:rgba(240,237,232,.3)">Translation appears below</p>`;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// TIMER
+// ═══════════════════════════════════════════════════════════
+function startTimer(){
+  const start=Date.now(),el=document.getElementById('timer');
+  el.classList.add('on');
+  callInterval=setInterval(()=>{
+    const s=Math.floor((Date.now()-start)/1000);
+    el.textContent=String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');
+  },1000);
+}
+function stopTimer(){ clearInterval(callInterval); document.getElementById('timer').classList.remove('on'); }
+
+// ═══════════════════════════════════════════════════════════
+// REFERENCE PANEL
+// ═══════════════════════════════════════════════════════════
+const ASL_DESC={A:'Fist, thumb side',B:'4 fingers up',C:'Curved C',D:'Index up, O-ring',E:'Fingers curled',F:'Index-thumb circle',G:'Index+thumb sideways',H:'2 fingers sideways',I:'Pinky up',J:'Pinky traces J*',K:'Index+middle+thumb',L:'L-shape',M:'3 fingers over thumb',N:'2 fingers over thumb',O:'O-shape',P:'K pointing down',Q:'G pointing down',R:'Index+middle crossed',S:'Fist, thumb over',T:'Thumb thru index',U:'2 fingers together',V:'V/peace sign',W:'3 fingers spread',X:'Index hooked',Y:'Thumb+pinky out',Z:'Draw Z in air*'};
+
+function buildRefGrid(){
+  const grid=document.getElementById('refGrid');
+  'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').forEach(l=>{
+    const item=document.createElement('div');
+    item.className='ref-item';
+    item.innerHTML=`<div class="rl">${l}</div><div class="rs">${(ASL_DESC[l]||'').split(' ').slice(0,2).join(' ')}</div>`;
+    grid.appendChild(item);
+  });
+}
+function toggleRef(){ refVisible=!refVisible; document.getElementById('refPanel').classList.toggle('show',refVisible); }
+
+// ═══════════════════════════════════════════════════════════
+// TOAST
+// ═══════════════════════════════════════════════════════════
+let toastTimer=null;
+function toast(msg,dur=2400){
+  clearTimeout(toastTimer);
+  const el=document.getElementById('toast');
+  el.textContent=msg; el.classList.add('on');
+  toastTimer=setTimeout(()=>el.classList.remove('on'),dur);
+}
+
+// ═══════════════════════════════════════════════════════════
+// AUTO-JOIN FROM URL
+// ═══════════════════════════════════════════════════════════
+function checkAutoJoin(){
+  const rid = getRoomFromURL();
+  if (rid) {
+    // Show join modal pre-filled
+    setTimeout(()=>{
+      document.getElementById('joinInput').value = rid;
+      document.getElementById('joinModal').classList.add('on');
+    }, 1200);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════════════════════
+function setStep(n,state){
+  const el=document.getElementById('step'+n);
+  if(!el) return;
+  el.className='load-step '+(state==='done'?'done':state==='active'?'active':'');
+}
+
+async function init(){
+  const ov=document.getElementById('loadOverlay');
+  const msg=document.getElementById('loadMsg');
+  try{
+    setStep(1,'active');
+    await tf.ready();
+    setStep(1,'done'); setStep(2,'active');
+    msg.textContent='Loading Handpose neural network…';
+
+    handposeModel=await handpose.load({detectionConfidence:0.8,maxContinuousChecks:10,iouThreshold:0.3,scoreThreshold:0.75});
+    setStep(2,'done'); setStep(3,'active');
+    msg.textContent='Defining ASL gesture library…';
+
+    await new Promise(r=>setTimeout(r,200));
+    const gestures=buildGestures();
+    gestureEstimator=new fp.GestureEstimator(gestures);
+    setStep(3,'done'); setStep(4,'active');
+    msg.textContent='Warming up…';
+
+    const dummyTensor=tf.zeros([1,1,1,3]);
+    await handposeModel.estimateHands(document.createElement('canvas'));
+    dummyTensor.dispose();
+    setStep(4,'done');
+
+    msg.textContent='Ready!';
+    await new Promise(r=>setTimeout(r,400));
+    buildRefGrid();
+  } catch(e){
+    console.error('Init error:',e);
+    msg.textContent='Error loading — check console and refresh';
+    document.getElementById('loadMsg').style.color='var(--red)';
+    return;
+  }
+  ov.classList.add('out');
+  setTimeout(()=>{ ov.style.display='none'; checkAutoJoin(); },600);
+}
+
+init();
+</script>
+</body>
+</html>
